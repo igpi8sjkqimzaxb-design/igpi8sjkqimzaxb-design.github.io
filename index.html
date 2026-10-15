@@ -3,77 +3,133 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>直播间</title>
+<title>...</title>
 <meta name="referrer" content="no-referrer-when-downgrade">
 <style>
   html,body{margin:0;width:100%;height:100%;background:#0f1420;overflow:hidden}
   #frame{display:block;width:100%;height:100%;border:0}
   #tip{position:fixed;inset:0;z-index:9;display:grid;place-items:center;background:#0f1420;color:#9aa4b2;
-       font:15px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif;transition:opacity .2s}
+       font:15px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif;transition:opacity .25s}
   #tip.hide{opacity:0;pointer-events:none}
+  #dbg{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:6px 10px;display:none;
+       background:rgba(11,15,26,.9);color:#7f8ca6;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;
+       white-space:pre-wrap;max-height:36%;overflow:auto}
 </style>
 </head>
 <body>
 <iframe id="frame" src="about:blank" referrerpolicy="origin" allowfullscreen></iframe>
 <div id="tip">正在进入直播间…</div>
+<pre id="dbg"></pre>
+
 <script>
 (function(){
-  /* ============ 配置区: 换成你的直播间地址 ============ */
-  var ROOM = 'https://www.xqevtj.cn/r/PO8j72?k=2sb4Iv8DtCy82T75';
-  /* ================================================== */
+  /* ============ 配置区 ============ */
+  // 配置源：依次探测，用第一个能通的（这些是"稳定的"域，换直播域时不用改这里）
+  var CONFIG_SOURCES = [
+    'https://qq.idpstx.cn',
+    'https://qq.enmcus.cn',
+    'https://www.xqevtj.cn'
+  ];
+  // 房间码 / 分享口令（换房间时只改这两行）
+  var ROOM_CODE = 'PO8j72';
+  var SHARE_KEY = '2sb4Iv8DtCy82T75';
+  // 全部配置源都失败时的兜底直播域
+  var FALLBACK_LIVE = 'https://www.xqevtj.cn';
+  // 调试日志（?debug=1 打开）
+  /* ================================ */
 
   var frame = document.getElementById('frame');
   var tip   = document.getElementById('tip');
+  var dbg   = document.getElementById('dbg');
+  var DEBUG = /[?&]debug=1/.test(location.search);
 
+  function log(s){
+    if (!DEBUG) return;
+    dbg.style.display = 'block';
+    dbg.textContent += s + '\n';
+    dbg.scrollTop = dbg.scrollHeight;
+  }
+
+  // 1) 取回跳带来的凭证
   var params = new URLSearchParams(location.search);
   var token     = params.get('wx_token') || '';
   var afterAuth = params.get('after_auth') || '';
-
-  // 清掉地址栏里的凭证(别留着/别被分享出去)
   if (token || afterAuth) {
-    params.delete('wx_token');
-    params.delete('after_auth');
+    params.delete('wx_token'); params.delete('after_auth');
     var clean = params.toString();
     history.replaceState(null, '', location.pathname + (clean ? '?' + clean : '') + location.hash);
   }
 
-  function buildSrc(t, a) {
-    var sep = ROOM.indexOf('?') >= 0 ? '&' : '?';
-    var extra = '';
-    if (t) extra += sep + 'wx_token=' + encodeURIComponent(t);
-    if (a) extra += (extra ? '&' : sep) + 'after_auth=' + encodeURIComponent(a);
-    return ROOM + extra;
+  function buildSrc(base, t, a){
+    var url = base.replace(/\/+$/, '') + '/r/' + encodeURIComponent(ROOM_CODE) + '?k=' + encodeURIComponent(SHARE_KEY);
+    if (t) url += '&wx_token=' + encodeURIComponent(t);
+    if (a) url += '&after_auth=' + encodeURIComponent(a);
+    return url;
   }
 
-  frame.src = buildSrc(token, afterAuth);
+  // 2) 依次探测配置源，拿当前直播域(share_base)
+  function resolveBase(){
+    var i = 0;
+    return new Promise(function(resolve){
+      (function next(){
+        if (i >= CONFIG_SOURCES.length) { log('[配置] 全部失败, 用兜底: ' + FALLBACK_LIVE); resolve(FALLBACK_LIVE); return; }
+        var src = CONFIG_SOURCES[i++];
+        log('[配置] 尝试 ' + src);
+        var ctl = new AbortController();
+        var timer = setTimeout(function(){ ctl.abort(); }, 4000);
+        fetch(src + '/api/public/site-config', {signal: ctl.signal})
+          .then(function(r){ return r.json(); })
+          .then(function(d){
+            clearTimeout(ctl && timer);
+            if (d && d.share_base) {
+              log('[配置] ✅ ' + src + ' -> share_base = ' + d.share_base);
+              resolve(d.share_base);
+            } else { log('[配置] ✗ ' + src + ' 没返回 share_base'); next(); }
+          })
+          .catch(function(e){
+            clearTimeout(timer);
+            log('[配置] ✗ ' + src + ' 失败: ' + (e && e.name));
+            next();
+          });
+      })();
+    });
+  }
 
-  frame.addEventListener('load', function(){
-    setTimeout(function(){ tip.classList.add('hide'); }, 300);
+  resolveBase().then(function(base){
+    var src = buildSrc(base, token, afterAuth);
+    log('[直播] iframe -> ' + src);
+    frame.src = src;
   });
-  // 兜底: 3 秒后无论加载完没都隐藏
-  setTimeout(function(){ tip.classList.add('hide'); }, 3000);
 
-  // 监听内层页的请求
+  // 3) 隐藏 loading
+  frame.addEventListener('load', function(){ setTimeout(function(){ tip.classList.add('hide'); }, 250); });
+  setTimeout(function(){ tip.classList.add('hide'); }, 6000);
+
+  // 4) 监听内层页请求
   window.addEventListener('message', function(ev){
     var d = ev.data || {};
 
-    // ① 登录: 微信授权页不能在 iframe 内跑, 由顶层窗口去做
+    // 登录：微信授权页不能在 iframe 里跑，由顶层窗口去做
     if (d.type === 'wx-auth-please' && d.authUrl) {
+      log('[登录] 顶层跳转授权: ' + d.authUrl);
       try {
         var u = new URL(d.authUrl);
         var shellRet = location.origin + location.pathname;
         if (d.action) shellRet += '?after_auth=' + encodeURIComponent(d.action);
-        u.searchParams.set('ret', shellRet);   // ret 指向壳, 授权完回到壳
-        location.href = u.toString();          // 顶层跳转
-      } catch (e) {
-        location.href = d.authUrl;
-      }
+        u.searchParams.set('ret', shellRet);
+        location.href = u.toString();
+      } catch (e) { location.href = d.authUrl; }
       return;
     }
 
-    // ② 支付: 微信支付必须在顶层窗口调起(iframe 内没有 WeixinJSBridge)
+    // 支付：必须在顶层窗口调起（iframe 内没有 WeixinJSBridge）
     if (d.type === 'wx-pay-please' && d.url) {
-      location.href = d.url;
+      log('[支付] 顶层跳转收银台: ' + d.url);
+      try {
+        var u2 = new URL(d.url, location.origin);
+        u2.searchParams.set('ret', location.href.split('#')[0]);
+        location.href = u2.toString();
+      } catch (e) { location.href = d.url; }
       return;
     }
   });
