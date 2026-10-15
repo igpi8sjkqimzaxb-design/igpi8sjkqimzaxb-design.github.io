@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>直播间</title>
+<meta name="referrer" content="no-referrer-when-downgrade">
+<style>
+  html,body{margin:0;width:100%;height:100%;background:#0f1420;overflow:hidden}
+  #frame{display:block;width:100%;height:100%;border:0}
+  #tip{position:fixed;inset:0;z-index:9;display:grid;place-items:center;background:#0f1420;color:#9aa4b2;
+       font:15px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif;transition:opacity .2s}
+  #tip.hide{opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<iframe id="frame" src="about:blank" referrerpolicy="origin" allowfullscreen></iframe>
+<div id="tip">正在进入直播间…</div>
+<script>
+(function(){
+  /* ============ 配置区: 换成你的直播间地址 ============ */
+  var ROOM = 'https://www.xqevtj.cn/r/PO8j72?k=2sb4Iv8DtCy82T75';
+  /* ================================================== */
+
+  var frame = document.getElementById('frame');
+  var tip   = document.getElementById('tip');
+
+  var params = new URLSearchParams(location.search);
+  var token     = params.get('wx_token') || '';
+  var afterAuth = params.get('after_auth') || '';
+
+  // 清掉地址栏里的凭证(别留着/别被分享出去)
+  if (token || afterAuth) {
+    params.delete('wx_token');
+    params.delete('after_auth');
+    var clean = params.toString();
+    history.replaceState(null, '', location.pathname + (clean ? '?' + clean : '') + location.hash);
+  }
+
+  function buildSrc(t, a) {
+    var sep = ROOM.indexOf('?') >= 0 ? '&' : '?';
+    var extra = '';
+    if (t) extra += sep + 'wx_token=' + encodeURIComponent(t);
+    if (a) extra += (extra ? '&' : sep) + 'after_auth=' + encodeURIComponent(a);
+    return ROOM + extra;
+  }
+
+  frame.src = buildSrc(token, afterAuth);
+
+  frame.addEventListener('load', function(){
+    setTimeout(function(){ tip.classList.add('hide'); }, 300);
+  });
+  // 兜底: 3 秒后无论加载完没都隐藏
+  setTimeout(function(){ tip.classList.add('hide'); }, 3000);
+
+  // 监听内层页的请求
+  window.addEventListener('message', function(ev){
+    var d = ev.data || {};
+
+    // ① 登录: 微信授权页不能在 iframe 内跑, 由顶层窗口去做
+    if (d.type === 'wx-auth-please' && d.authUrl) {
+      try {
+        var u = new URL(d.authUrl);
+        var shellRet = location.origin + location.pathname;
+        if (d.action) shellRet += '?after_auth=' + encodeURIComponent(d.action);
+        u.searchParams.set('ret', shellRet);   // ret 指向壳, 授权完回到壳
+        location.href = u.toString();          // 顶层跳转
+      } catch (e) {
+        location.href = d.authUrl;
+      }
+      return;
+    }
+
+    // ② 支付: 微信支付必须在顶层窗口调起(iframe 内没有 WeixinJSBridge)
+    if (d.type === 'wx-pay-please' && d.url) {
+      location.href = d.url;
+      return;
+    }
+  });
+})();
+</script>
+</body>
+</html>
