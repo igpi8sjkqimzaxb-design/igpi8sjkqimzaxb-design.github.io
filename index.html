@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>...</title>
+<title>直播间</title>
 <meta name="referrer" content="no-referrer-when-downgrade">
 <style>
   html,body{margin:0;width:100%;height:100%;background:#0f1420;overflow:hidden}
@@ -23,20 +23,17 @@
 
 <script>
 (function(){
-  /* ============ 配置区 ============ */
-  // 配置源：依次探测，用第一个能通的（这些是"稳定的"域，换直播域时不用改这里）
+  /* ============ 配置区（一般不用改） ============ */
+  // 配置源：依次探测，用第一个能通的（换域名时把新域加到这里）
   var CONFIG_SOURCES = [
     'https://qq.idpstx.cn',
-    'https://qq.enmcus.cn',
-    'https://www.xqevtj.cn'
+    'https://qq.enmcus.cn'
   ];
-  // 房间码 / 分享口令（换房间时只改这两行）
-  var ROOM_CODE = 'PO8j72';
-  var SHARE_KEY = '2sb4Iv8DtCy82T75';
-  // 全部配置源都失败时的兜底直播域
-  var FALLBACK_LIVE = 'https://www.xqevtj.cn';
-  // 调试日志（?debug=1 打开）
-  /* ================================ */
+  // 全部失败时的兜底
+  var FALLBACK_BASE = 'https://qq.idpstx.cn';
+  var FALLBACK_ROOM = 'rV9b3F';
+  var FALLBACK_KEY  = 'X5oCCDiY2yK1OZ1C';
+  /* ============================================ */
 
   var frame = document.getElementById('frame');
   var tip   = document.getElementById('tip');
@@ -50,7 +47,7 @@
     dbg.scrollTop = dbg.scrollHeight;
   }
 
-  // 1) 取回跳带来的凭证
+  // 1) 取回跳凭证
   var params = new URLSearchParams(location.search);
   var token     = params.get('wx_token') || '';
   var afterAuth = params.get('after_auth') || '';
@@ -60,62 +57,68 @@
     history.replaceState(null, '', location.pathname + (clean ? '?' + clean : '') + location.hash);
   }
 
-  function buildSrc(base, t, a){
-    var url = base.replace(/\/+$/, '') + '/r/' + encodeURIComponent(ROOM_CODE) + '?k=' + encodeURIComponent(SHARE_KEY);
-    if (t) url += '&wx_token=' + encodeURIComponent(t);
-    if (a) url += '&after_auth=' + encodeURIComponent(a);
-    return url;
+  // 2) 房间来源优先级：
+  //    ① hash:  #/r/房间码?k=口令
+  //    ② 后端:  /api/public/shell-config（默认房间）
+  //    ③ 兜底
+  function roomFromHash(){
+    var m = (location.hash || '').match(/#\/r\/([^?\/&]+)(?:\?k=([^&]+))?/);
+    if (!m) return null;
+    return { code: decodeURIComponent(m[1]), key: m[2] ? decodeURIComponent(m[2]) : '' };
   }
 
-  // 2) 依次探测配置源，拿当前直播域(share_base)
-  function resolveBase(){
+  function fetchShellConfig(){
     var i = 0;
     return new Promise(function(resolve){
       (function next(){
-        if (i >= CONFIG_SOURCES.length) { log('[配置] 全部失败, 用兜底: ' + FALLBACK_LIVE); resolve(FALLBACK_LIVE); return; }
+        if (i >= CONFIG_SOURCES.length) { log('[配置] 全部失败, 用兜底'); resolve(null); return; }
         var src = CONFIG_SOURCES[i++];
         log('[配置] 尝试 ' + src);
         var ctl = new AbortController();
         var timer = setTimeout(function(){ ctl.abort(); }, 4000);
-        fetch(src + '/api/public/site-config', {signal: ctl.signal})
+        fetch(src + '/api/public/shell-config', {signal: ctl.signal})
           .then(function(r){ return r.json(); })
           .then(function(d){
-            clearTimeout(ctl && timer);
-            if (d && d.share_base) {
-              log('[配置] ✅ ' + src + ' -> share_base = ' + d.share_base);
-              resolve(d.share_base);
-            } else { log('[配置] ✗ ' + src + ' 没返回 share_base'); next(); }
-          })
-          .catch(function(e){
             clearTimeout(timer);
-            log('[配置] ✗ ' + src + ' 失败: ' + (e && e.name));
-            next();
-          });
+            if (d && d.room_code) { log('[配置] ✅ ' + src + ' -> ' + d.room_code); resolve(d); }
+            else { log('[配置] ✗ ' + src + ' 无 room_code'); next(); }
+          })
+          .catch(function(e){ clearTimeout(timer); log('[配置] ✗ ' + src + ' ' + (e && e.name)); next(); });
       })();
     });
   }
 
-  resolveBase().then(function(base){
-    var src = buildSrc(base, token, afterAuth);
+  function resolveRoom(){
+    var h = roomFromHash();
+    if (h && h.code) { log('[房间] 来自 hash: ' + h.code); return Promise.resolve({ code: h.code, key: h.key, base: null }); }
+    return fetchShellConfig().then(function(d){
+      if (d && d.room_code) return { code: d.room_code, key: d.share_key || '', base: d.share_base || null };
+      return { code: FALLBACK_ROOM, key: FALLBACK_KEY, base: null };
+    });
+  }
+
+  resolveRoom().then(function(r){
+    var base = r.base || FALLBACK_BASE;
+    var src = base.replace(/\/+$/, '') + '/r/' + encodeURIComponent(r.code) + '?k=' + encodeURIComponent(r.key);
+    if (token) src += '&wx_token=' + encodeURIComponent(token);
+    if (afterAuth) src += '&after_auth=' + encodeURIComponent(afterAuth);
     log('[直播] iframe -> ' + src);
     frame.src = src;
   });
 
-  // 3) 隐藏 loading
   frame.addEventListener('load', function(){ setTimeout(function(){ tip.classList.add('hide'); }, 250); });
   setTimeout(function(){ tip.classList.add('hide'); }, 6000);
 
-  // 4) 监听内层页请求
+  // 3) 监听内层页请求
   window.addEventListener('message', function(ev){
     var d = ev.data || {};
 
     // 登录：微信授权页不能在 iframe 里跑，由顶层窗口去做
     if (d.type === 'wx-auth-please' && d.authUrl) {
-      log('[登录] 顶层跳转授权: ' + d.authUrl);
+      log('[登录] 顶层跳转授权');
       try {
         var u = new URL(d.authUrl);
-        var shellRet = location.origin + location.pathname;
-        if (d.action) shellRet += '?after_auth=' + encodeURIComponent(d.action);
+        var shellRet = location.origin + location.pathname + location.hash;  // 保留 hash(房间)
         u.searchParams.set('ret', shellRet);
         location.href = u.toString();
       } catch (e) { location.href = d.authUrl; }
@@ -124,7 +127,7 @@
 
     // 支付：必须在顶层窗口调起（iframe 内没有 WeixinJSBridge）
     if (d.type === 'wx-pay-please' && d.url) {
-      log('[支付] 顶层跳转收银台: ' + d.url);
+      log('[支付] 顶层跳转收银台');
       try {
         var u2 = new URL(d.url, location.origin);
         u2.searchParams.set('ret', location.href.split('#')[0]);
