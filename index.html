@@ -61,10 +61,21 @@
   //    ① hash:  #/r/房间码?k=口令
   //    ② 后端:  /api/public/shell-config（默认房间）
   //    ③ 兜底
+  function hashQuery(){
+    var h = location.hash || '';
+    var i = h.indexOf('?');
+    return new URLSearchParams(i < 0 ? '' : h.slice(i + 1));
+  }
+
   function roomFromHash(){
-    var m = (location.hash || '').match(/#\/r\/([^?\/&]+)(?:\?k=([^&]+))?/);
+    var m = (location.hash || '').match(/#\/r\/([^?\/&]+)/);
     if (!m) return null;
-    return { code: decodeURIComponent(m[1]), key: m[2] ? decodeURIComponent(m[2]) : '' };
+    var q = hashQuery();
+    return {
+      code: decodeURIComponent(m[1]),
+      key: q.get('k') || '',
+      action: q.get('after_auth') || ''
+    };
   }
 
   function fetchShellConfig(){
@@ -90,10 +101,10 @@
 
   function resolveRoom(){
     var h = roomFromHash();
-    if (h && h.code) { log('[房间] 来自 hash: ' + h.code); return Promise.resolve({ code: h.code, key: h.key, base: null }); }
+    if (h && h.code) { log('[房间] 来自 hash: ' + h.code); return Promise.resolve({ code: h.code, key: h.key, action: h.action, base: null }); }
     return fetchShellConfig().then(function(d){
-      if (d && d.room_code) return { code: d.room_code, key: d.share_key || '', base: d.share_base || null };
-      return { code: FALLBACK_ROOM, key: FALLBACK_KEY, base: null };
+      if (d && d.room_code) return { code: d.room_code, key: d.share_key || '', action: afterAuth, base: d.share_base || null };
+      return { code: FALLBACK_ROOM, key: FALLBACK_KEY, action: afterAuth, base: null };
     });
   }
 
@@ -101,7 +112,8 @@
     var base = r.base || FALLBACK_BASE;
     var src = base.replace(/\/+$/, '') + '/r/' + encodeURIComponent(r.code) + '?k=' + encodeURIComponent(r.key);
     if (token) src += '&wx_token=' + encodeURIComponent(token);
-    if (afterAuth) src += '&after_auth=' + encodeURIComponent(afterAuth);
+    var act = r.action || afterAuth;
+    if (act) src += '&after_auth=' + encodeURIComponent(act);
     log('[直播] iframe -> ' + src);
     frame.src = src;
   });
@@ -118,7 +130,13 @@
       log('[登录] 顶层跳转授权');
       try {
         var u = new URL(d.authUrl);
-        var shellRet = location.origin + location.pathname + location.hash;  // 保留 hash(房间)
+        var h = location.hash || '';
+        var hi = h.indexOf('?');
+        var hbase = hi < 0 ? h : h.slice(0, hi);
+        var hq = new URLSearchParams(hi < 0 ? '' : h.slice(hi + 1));
+        if (d.action) hq.set('after_auth', d.action);
+        var hs = hq.toString();
+        var shellRet = location.origin + location.pathname + location.search + hbase + (hs ? '?' + hs : '');
         u.searchParams.set('ret', shellRet);
         location.href = u.toString();
       } catch (e) { location.href = d.authUrl; }
